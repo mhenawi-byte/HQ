@@ -59,7 +59,7 @@ export function pairingLink(conn = getConn()) {
   return `${base}#pair=${btoa(JSON.stringify({ u: conn.url, k: conn.key }))}`;
 }
 export function readPairing(hash) {
-  const m = hash.match(/^#pair=(.+)$/);
+  const m = String(hash).replace(/\s+/g, '').match(/#pair=([A-Za-z0-9+/=%_-]+)/);
   if (!m) return null;
   try { const { u, k } = JSON.parse(atob(decodeURIComponent(m[1]))); return u && k ? { url: u, key: k } : null; } catch { return null; }
 }

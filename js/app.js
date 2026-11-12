@@ -740,7 +740,7 @@ function connectionsCard() {
         <button class="btn small" data-act="copy-server">Copy server code</button>
       </div>
       <form class="addbar" data-form="connect-google" autocomplete="off">
-        <input name="url" type="url" placeholder="https://script.google.com/macros/s/…/exec" aria-label="HQ server URL" required>
+        <input name="url" type="text" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="Server URL (…/exec) or pairing link" aria-label="HQ server URL or pairing link" required>
         <button class="btn primary" type="submit">Connect</button>
       </form>
     </div>`;
@@ -1737,12 +1737,12 @@ function setupGuide() {
 /* ---------------- Toast ---------------- */
 
 let toastTimer;
-function toast(msg) {
+function toast(msg, ms = 2600) {
   const el = $('#toast');
   el.textContent = msg;
   el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
+  toastTimer = setTimeout(() => el.classList.remove("show"), ms);
 }
 
 async function copy(text, msg = 'Copied.') {
@@ -2029,6 +2029,8 @@ document.addEventListener('submit', async (e) => {
     }
     case 'connect-google': {
       let url = val('url');
+      const pairIdx = url.indexOf('#pair=');
+      if (pairIdx >= 0) { await handlePairing(url.slice(pairIdx)); break; }
       if (!/^https:\/\/script\.google(usercontent)?\.com\/.+\/exec$/.test(url)) {
         toast('That should be the Web app URL ending in /exec');
         return;
@@ -2629,10 +2631,11 @@ setInterval(() => { if (!document.hidden) refreshAll(); }, 5 * 60000);
 
 /* ---------------- Pairing a second device ---------------- */
 
-async function handlePairing() {
-  const conn = readPairing(location.hash);
-  history.replaceState(null, '', location.pathname + '#today');
-  if (!conn) { toast('That pairing link is broken.'); render(); return; }
+async function handlePairing(hash = location.hash) {
+  const conn = readPairing(hash.trim());
+  if (location.hash.startsWith('#pair=')) history.replaceState(null, '', location.pathname + '#today');
+  if (!conn) { toast('That pairing link is broken. Copy it again from your laptop: Settings → Pair your phone.', 8000); render(); return; }
+  toast('DARKO › Pairing…');
   try {
     const { status } = await call('hello', {}, conn);
     setConn(conn);
@@ -2642,7 +2645,7 @@ async function handlePairing() {
     render();
     refreshAll({ force: true });
   } catch (e) {
-    toast(`Pairing failed: ${e.message}`);
+    toast(`Pairing failed: ${e.message}`, 8000);
     render();
   }
 }
