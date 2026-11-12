@@ -2864,5 +2864,22 @@ save(S);
 refreshAll();
 
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => {
+      // Look for a new version whenever the app comes back to the front, and every 30 minutes.
+      const check = () => reg.update().catch(() => {});
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+      setInterval(check, 30 * 60000);
+    }).catch(() => {});
+    // A new version took over: reload once to show it (unless you're in the middle of typing).
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloading) return;
+      const reload = () => { if (reloading) return; reloading = true; location.reload(); };
+      const a = document.activeElement;
+      if (a && a.matches('input, textarea') && a.value) document.addEventListener('focusout', () => setTimeout(reload, 100), { once: true });
+      else reload();
+    });
+  });
 }
