@@ -447,6 +447,27 @@ function eventRow(ev, day) {
 
 /* ---------------- Views ---------------- */
 
+// Personal to-dos on Today: everything open that isn't already on the Mission board or Incoming,
+// plus what you checked off today (so a tap doesn't make it vanish).
+function todoCard(d) {
+  const shown = new Set([...d.mission, ...d.tomorrow].map((x) => x.id));
+  const open = S.personal.filter((x) => !x.done && !shown.has(x.id)).sort(byDue);
+  const doneToday = S.personal.filter((x) => x.done && x.doneAt === d.t && !shown.has(x.id));
+  const total = S.personal.filter((x) => !x.done).length;
+  return `
+    <div class="card">
+      <div class="card-head"><span class="eyebrow">To-do · Personal</span><a class="btn ghost small" href="#personal">${total} open</a></div>
+      <form class="addbar" data-form="personal-quick" autocomplete="off">
+        <input name="title" placeholder="Add a to-do…" aria-label="Add a personal to-do" enterkeyhint="done">
+        <button class="btn primary" type="submit" aria-label="Add to-do">${ICON.plus}</button>
+      </form>
+      ${open.length || doneToday.length
+        ? `<ul class="list">${[...open.slice(0, 12), ...doneToday].map((x) => taskRow(x, 'personal')).join('')}</ul>
+           ${open.length > 12 ? `<a class="more-link" href="#personal">+ ${open.length - 12} more in Personal</a>` : ''}`
+        : `<div class="empty">${total ? 'All your to-dos with dates are on the Mission board above.' : 'Nothing on your list. Add one above.'}</div>`}
+    </div>`;
+}
+
 function viewToday() {
   const d = todayData();
   const name = S.settings.name ? `, ${esc(S.settings.name)}` : '';
@@ -516,6 +537,7 @@ function viewToday() {
           ? `<ul class="list">${d.mission.map((x) => taskRow(x, x.kind, { showKind: true })).join('')}</ul>`
           : `<div class="empty"><b>Nothing due today.</b><br>Add assignments in School or tasks in Personal.</div>`}
       </div>
+      ${todoCard(d)}
       ${scheduleCard}
       <div class="card">
         <div class="card-head"><span class="eyebrow" style="color:var(--soon)">Incoming · tomorrow</span><span class="count">${d.tomorrow.length}</span></div>
@@ -1617,7 +1639,7 @@ function render() {
   renderNav(r);
   // Keep anything typed into forms on this page when it redraws (e.g. after a background sync).
   const kept = sameRoute ? [...view.querySelectorAll('form[data-form] [name]')]
-    .filter((el) => el.type !== 'checkbox' && el.type !== 'radio' && el.value)
+    .filter((el) => el.type !== 'checkbox' && el.type !== 'radio' && el.value && el.form.dataset.form !== submitting)
     .map((el) => [el.form.dataset.form, el.name, el.value]) : [];
   view.innerHTML = VIEWS[r]();
   for (const [f, n, v] of kept) {
@@ -1986,6 +2008,13 @@ document.addEventListener('change', (e) => {
     });
   }
 });
+
+// The form being submitted right now: a redraw caused by its own submit must not put the sent text back.
+let submitting = null;
+document.addEventListener('submit', (e) => {
+  submitting = e.target.closest('form[data-form]')?.dataset.form || null;
+  setTimeout(() => { submitting = null; }, 0);
+}, true);
 
 document.addEventListener('submit', async (e) => {
   const f = e.target.closest('form[data-form]');
