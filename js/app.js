@@ -809,8 +809,8 @@ function viewSettings() {
     ['Google sync + Calendar', connected()],
     ['Canvas (VT)', !!st.canvas],
     ['WHOOP sleep + recovery', !!st.whoop],
-    ['Class schedule', S.classes.some((c) => (c.slots || []).length)],
-    ['Email reminders', st.reminders != null],
+    ['Class schedule', S.classes.some((c) => (c.slots || []).length) || 'Add times: School → Classes'],
+    ['Email reminders', st.reminders != null || 'Turn on above'],
     ['Fuel · Money · Focus · Journal', true],
     ['Darko voice', !!SR],
   ];
@@ -843,7 +843,7 @@ function viewSettings() {
 
     <div class="card">
       <div class="card-head"><span class="eyebrow">Modules</span><span class="count">v${VERSION}</span></div>
-      <ul class="modules">${modules.map(([n, on]) => `<li><span>${n}</span><span class="status ${on ? 'on' : 'off'}">${on ? 'ONLINE' : 'OFFLINE'}</span></li>`).join('')}</ul>
+      <ul class="modules">${modules.map(([n, on]) => `<li><span>${n}${typeof on === 'string' ? `<small>${on}</small>` : ''}</span><span class="status ${on === true ? 'on' : 'off'}">${on === true ? 'ONLINE' : typeof on === 'string' ? 'NOT SET' : 'OFFLINE'}</span></li>`).join('')}</ul>
     </div>
 
     <div class="card">

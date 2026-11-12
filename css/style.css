@@ -861,3 +861,4 @@ a.wstat:hover { border-color: var(--line-strong); }
 .darko-bar .mic.live { color: #fff; background: var(--late); border-color: var(--late); animation: pulse 1.2s infinite; }
 @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255, 93, 108, 0.55); } 50% { box-shadow: 0 0 0 8px rgba(255, 93, 108, 0); } }
 .darko-bar .btn { width: 48px; padding: 0; justify-content: center; }
+.modules li span small { display: block; font: 500 11px var(--mono); color: var(--muted); margin-top: 2px; }
