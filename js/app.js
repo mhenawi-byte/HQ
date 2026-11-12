@@ -158,10 +158,12 @@ const findEvent = (key) => (getCache().events || []).find((ev) => eventKey(ev) =
 
 async function loadEvents(from, to) {
   try {
-    const { events } = await call('events', { from, to });
+    const res = await call('events', { from, to });
+    const bad = res.events.find((ev) => ev.id === 'outlook-error');
+    const events = res.events.filter((ev) => ev.id !== 'outlook-error');
     const cutoff = Date.now() - 60 * 86400000;
     const keep = (getCache().events || []).filter((ev) => (ev.e <= from || ev.s >= to) && ev.e > cutoff);
-    setCache({ events: [...keep, ...events.map(normEvent)], eventsAt: Date.now(), eventsError: '' });
+    setCache({ events: [...keep, ...events.map(normEvent)], eventsAt: Date.now(), eventsError: '', outlookError: bad ? bad.error : '' });
   } catch (e) {
     setCache({ eventsError: e.message });
   }
@@ -437,7 +439,7 @@ function eventRow(ev, day) {
   return `<li class="event ${past ? 'past' : ''}">
     <button class="event-body" data-act="edit-event" data-key="${esc(eventKey(ev))}">
       <span class="event-time">${time}</span>
-      <span class="event-main"><span class="event-title">${esc(ev.title)}</span>
+      <span class="event-main"><span class="event-title">${esc(ev.title)}${ev.source === 'outlook' ? `<span class="src-tag">${/teams/i.test(ev.location) || ev.join ? 'Teams' : 'Outlook'}</span>` : ''}</span>
       ${ev.location ? `<span class="event-loc">${ICON.pin}${esc(ev.location)}</span>` : ''}</span>
     </button>
   </li>`;
@@ -768,6 +770,29 @@ function connectionsCard() {
       </form>
     </div>`;
 
+  const outlook = !on ? '' : st.outlook ? `
+    <div class="conn">
+      <div class="conn-head"><b>Outlook · Teams</b><span class="status ${c.outlookError ? 'off' : 'on'}">${c.outlookError ? 'ERROR' : 'ONLINE'}</span></div>
+      <p>Your VT calendar (classes, Teams meetings) shows on Today and Calendar, refreshed every 5 minutes. View only.</p>
+      ${c.outlookError ? `<p class="err">${esc(c.outlookError)}</p>` : ''}
+      <div class="btn-row">
+        <button class="btn small" data-act="sync-now">${ICON.sync}Refresh</button>
+        <button class="btn ghost small" data-act="disconnect-outlook">Disconnect</button>
+      </div>
+    </div>` : `
+    <div class="conn">
+      <div class="conn-head"><b>Outlook · Teams</b><span class="status off">OFFLINE</span></div>
+      <ol class="steps">
+        <li>Open <a href="https://outlook.office.com/calendar" target="_blank" rel="noopener">outlook.office.com</a> → ⚙ → Calendar → <b>Shared calendars</b>.</li>
+        <li>Under <b>Publish a calendar</b>: Calendar, <b>Can view all details</b>, Publish.</li>
+        <li>Copy the <b>ICS</b> link and paste it here.</li>
+      </ol>
+      <form class="addbar" data-form="connect-outlook" autocomplete="off" style="margin-top:10px">
+        <input name="url" type="text" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="https://outlook.office365.com/owa/calendar/…/calendar.ics" aria-label="Outlook calendar ICS link" required>
+        <button class="btn primary" type="submit">Link</button>
+      </form>
+    </div>`;
+
   const whoop = !on ? '' : st.whoop ? `
     <div class="conn">
       <div class="conn-head"><b>WHOOP</b><span class="status ${c.whoopError ? 'off' : 'on'}">${c.whoopError ? 'ERROR' : 'ONLINE'}</span></div>
@@ -798,7 +823,7 @@ function connectionsCard() {
 
   return `<div class="card span">
     <div class="card-head"><span class="eyebrow">Connections</span>${on ? `<span class="count">${esc(conn.url.replace(/^https:\/\/script\.google\.com\/macros\/s\/(.{6}).*$/, 'SERVER $1…'))}</span>` : ''}</div>
-    <div class="conns">${google}${canvas}${whoop}</div>
+    <div class="conns">${google}${canvas}${outlook}${whoop}</div>
   </div>`;
 }
 
@@ -808,6 +833,7 @@ function viewSettings() {
     ['Core · lists, habits, Today', true],
     ['Google sync + Calendar', connected()],
     ['Canvas (VT)', !!st.canvas],
+    ['Outlook · Teams', !!st.outlook],
     ['WHOOP sleep + recovery', !!st.whoop],
     ['Class schedule', S.classes.some((c) => (c.slots || []).length) || 'Add times: School → Classes'],
     ['Email reminders', st.reminders != null || 'Turn on above'],
@@ -1629,6 +1655,23 @@ function closeSheet() {
 }
 const sheetHead = (title) => `<div class="sheet-head"><span class="eyebrow">${title}</span><button type="button" class="icon-btn" data-act="close" aria-label="Close">${ICON.x}</button></div>`;
 
+function outlookSheet(ev) {
+  const fmtDay = (iso) => parse(iso).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+  const when = ev.allDay
+    ? `${fmtDay(ev.start)}${ev.end && addDays(ev.start, 1) !== ev.end ? ` – ${fmtDay(addDays(ev.end, -1))}` : ''} · All day`
+    : `${fmtDay(isoOf(new Date(ev.s)))} · ${fmtTime(ev.s)} – ${fmtTime(ev.e)}`;
+  return `${sheetHead(/teams/i.test(ev.location) || ev.join ? 'Teams meeting' : 'Outlook event')}
+    <h2 class="ro-title">${esc(ev.title)}</h2>
+    <p class="ro-line">${when}</p>
+    ${ev.location ? `<p class="ro-line">${ICON.pin} ${esc(ev.location)}</p>` : ''}
+    ${ev.recurring ? '<p class="ro-line muted">Repeating meeting</p>' : ''}
+    ${ev.notes ? `<p class="ro-notes">${esc(ev.notes)}</p>` : ''}
+    <p class="hint">From your VT Outlook calendar. Change or cancel it in Outlook or Teams; HQ picks it up within 5 minutes.</p>
+    <div class="sheet-actions">
+      ${ev.join ? `<a class="btn primary" href="${esc(ev.join)}" target="_blank" rel="noopener">Join in Teams</a>` : `<a class="btn" href="https://teams.microsoft.com/v2/" target="_blank" rel="noopener">Open Teams</a>`}
+    </div>`;
+}
+
 function taskForm(kind, t) {
   const isNew = !t;
   t = t || { title: '', classId: schoolFilter !== 'all' ? schoolFilter : '', due: route() === 'calendar' ? calSel : '', priority: 'med', notes: '' };
@@ -1832,6 +1875,7 @@ const actions = {
   },
   'edit-event'(el) {
     const ev = findEvent(el.dataset.key);
+    if (ev?.readonly) { openSheet(outlookSheet(ev), { focus: false }); return; }
     if (ev) openSheet(eventForm(ev), { focus: false });
   },
   allday(el) {
@@ -1873,6 +1917,14 @@ const actions = {
     setConn(null); clearCache(); loadedMonths.clear(); setSync('off'); render();
   },
   'canvas-now'() { importCanvas({ announce: true }); },
+  async 'disconnect-outlook'() {
+    if (!confirm('Stop showing your Outlook / Teams calendar?')) return;
+    try {
+      const { status } = await call('disconnect', { what: 'outlook' });
+      setCache({ status, outlookError: '', events: (getCache().events || []).filter((ev) => ev.source !== 'outlook') });
+      render();
+    } catch (e) { toast(e.message); }
+  },
   async 'disconnect-canvas'() {
     if (!confirm('Stop importing from Canvas? Assignments already imported stay.')) return;
     try { const { status } = await call('disconnect', { what: 'canvas' }); setCache({ status, canvasError: '' }); render(); } catch (e) { toast(e.message); }
@@ -2063,6 +2115,21 @@ document.addEventListener('submit', async (e) => {
       } catch (err) {
         btn.disabled = false; btn.textContent = 'Link';
         toast(`Canvas: ${err.message}`);
+      }
+      break;
+    }
+    case 'connect-outlook': {
+      btn.disabled = true; btn.textContent = 'Linking…';
+      try {
+        const { count, status } = await call('setOutlook', { url: val('url') });
+        setCache({ status, outlookError: '' });
+        loadedMonths.clear();
+        toast(`DARKO › Outlook linked. ${count} event${count === 1 ? '' : 's'} in the next 30 days.`);
+        render();
+        refreshAll({ force: true });
+      } catch (err) {
+        btn.disabled = false; btn.textContent = 'Link';
+        toast(`Outlook: ${err.message}`, 8000);
       }
       break;
     }

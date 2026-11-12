@@ -55,6 +55,18 @@ Upcoming assignments show up in **School** with their class and due time. HQ che
 
 ---
 
+## 3b. Outlook / Teams (VT), about 1 minute
+
+Shows your VT Outlook calendar (Teams meetings, anything on it) on Today and Calendar. View only.
+
+1. Open [outlook.office.com](https://outlook.office.com/calendar) → ⚙ → **Calendar → Shared calendars**.
+2. Under **Publish a calendar**: pick **Calendar**, **Can view all details**, then **Publish**.
+3. Copy the **ICS** link (ends in `calendar.ics`) and paste it into **HQ → Settings → Outlook · Teams**.
+
+Keep that link private: anyone with it can see your calendar. To revoke it, click **Unpublish** in the same Outlook screen.
+
+---
+
 ## 4. WHOOP, about 5 minutes
 
 1. Go to **https://developer-dashboard.whoop.com** and sign in with your WHOOP account.

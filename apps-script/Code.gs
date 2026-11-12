@@ -58,6 +58,7 @@ function doPost(e) {
       case 'deleteEvent': deleteEvent_(req.event); return json_({ ok: true });
       case 'setCanvas': return json_({ ok: true, items: setCanvas_(req.url) });
       case 'canvas': return json_({ ok: true, items: canvas_() });
+      case 'setOutlook': return json_({ ok: true, count: setOutlook_(req.url), status: status_() });
       case 'setWhoop': return json_({ ok: true, authUrl: setWhoop_(req) });
       case 'whoop': return json_({ ok: true, whoop: whoop_() });
       case 'disconnect': disconnect_(req.what); return json_({ ok: true, status: status_() });
@@ -84,6 +85,7 @@ function page_(title, body) {
 function status_() {
   return {
     canvas: !!PROPS.getProperty('CANVAS_URL'),
+    outlook: !!PROPS.getProperty('OUTLOOK_URL'),
     whoop: !!PROPS.getProperty('WHOOP_REFRESH'),
     whoopApp: !!PROPS.getProperty('WHOOP_CLIENT_ID'),
     reminders: reminderTrigger_() ? Number(PROPS.getProperty('REMINDER_HOUR') || 20) : null,
@@ -94,6 +96,7 @@ function status_() {
 
 function disconnect_(what) {
   if (what === 'canvas') PROPS.deleteProperty('CANVAS_URL');
+  if (what === 'outlook') { PROPS.deleteProperty('OUTLOOK_URL'); CacheService.getScriptCache().remove('OUTLOOK'); }
   if (what === 'whoop') ['WHOOP_ACCESS', 'WHOOP_REFRESH', 'WHOOP_EXPIRES', 'WHOOP_STATE'].forEach(function (k) { PROPS.deleteProperty(k); });
 }
 
@@ -180,7 +183,12 @@ function eventOut_(ev) {
 }
 
 function listEvents_(from, to) {
-  return cal_().getEvents(new Date(from), new Date(to)).map(eventOut_);
+  var list = cal_().getEvents(new Date(from), new Date(to)).map(eventOut_);
+  if (PROPS.getProperty('OUTLOOK_URL')) {
+    try { list = list.concat(outlookEvents_(from, to)); }
+    catch (err) { list.push({ id: 'outlook-error', error: String(err.message || err), title: '', allDay: true, start: '1970-01-01', end: '1970-01-02' }); }
+  }
+  return list;
 }
 
 // Finds one specific event (for recurring events: the instance that starts at `start`).
@@ -484,4 +492,182 @@ function authorize() {
   ScriptApp.getProjectTriggers();
   MailApp.getRemainingDailyQuota();
   Logger.log('HQ server authorized for ' + Session.getEffectiveUser().getEmail());
+}
+
+/* ------------------------------------------------------------------ */
+/* 6. Outlook / Teams (published calendar feed, read-only)             */
+/* ------------------------------------------------------------------ */
+
+var WIN_TZ = {
+  'Eastern Standard Time': 'America/New_York', 'US Eastern Standard Time': 'America/Indianapolis',
+  'Central Standard Time': 'America/Chicago', 'Mountain Standard Time': 'America/Denver',
+  'US Mountain Standard Time': 'America/Phoenix', 'Pacific Standard Time': 'America/Los_Angeles',
+  'Alaskan Standard Time': 'America/Anchorage', 'Hawaiian Standard Time': 'Pacific/Honolulu',
+  'GMT Standard Time': 'Europe/London', 'Greenwich Standard Time': 'Atlantic/Reykjavik',
+  'W. Europe Standard Time': 'Europe/Berlin', 'Romance Standard Time': 'Europe/Paris',
+  'Central European Standard Time': 'Europe/Warsaw', 'E. Europe Standard Time': 'Europe/Bucharest',
+  'Egypt Standard Time': 'Africa/Cairo', 'Arab Standard Time': 'Asia/Riyadh', 'Arabian Standard Time': 'Asia/Dubai',
+  'India Standard Time': 'Asia/Kolkata', 'China Standard Time': 'Asia/Shanghai', 'Tokyo Standard Time': 'Asia/Tokyo',
+  'UTC': 'UTC', 'Coordinated Universal Time': 'UTC'
+};
+
+function setOutlook_(url) {
+  url = String(url || '').trim().replace(/^webcal:/i, 'https:');
+  if (!/^https:\/\/\S+\.ics(\?\S*)?$/i.test(url)) throw new Error('Paste the ICS link from Outlook (it ends in calendar.ics).');
+  PROPS.setProperty('OUTLOOK_URL', url);
+  CacheService.getScriptCache().remove('OUTLOOK');
+  var now = Date.now();
+  return outlookEvents_(now, now + 30 * 86400000).length;
+}
+
+// Parsed (not expanded) events, cached for 5 minutes.
+function outlookRaw_() {
+  var url = PROPS.getProperty('OUTLOOK_URL');
+  if (!url) return [];
+  var cache = CacheService.getScriptCache();
+  var hit = cache.get('OUTLOOK');
+  if (hit) return JSON.parse(hit);
+  var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+  if (res.getResponseCode() !== 200) throw new Error('Outlook feed returned ' + res.getResponseCode() + '. Publish the calendar again and paste the new link.');
+  var list = parseOutlookIcs_(res.getContentText());
+  var json = JSON.stringify(list);
+  if (json.length < 95000) cache.put('OUTLOOK', json, 300);
+  return list;
+}
+
+function parseOutlookIcs_(txt) {
+  var lines = txt.replace(/\r?\n[ \t]/g, '').split(/\r?\n/);
+  var out = [], cur = null, depth = 0;
+  lines.forEach(function (line) {
+    if (line === 'BEGIN:VEVENT') { cur = { exdate: [] }; depth = 0; return; }
+    if (line === 'END:VEVENT') { if (cur) out.push(cur); cur = null; return; }
+    if (!cur) return;
+    if (/^BEGIN:/.test(line)) { depth++; return; } // e.g. VALARM
+    if (/^END:/.test(line)) { depth--; return; }
+    if (depth > 0) return;
+    var i = line.indexOf(':');
+    if (i < 0) return;
+    var head = line.slice(0, i), val = line.slice(i + 1), name = head.split(';')[0].toUpperCase();
+    if (name === 'DTSTART' || name === 'DTEND' || name === 'RECURRENCE-ID') cur[name] = icsTime_(head, val);
+    else if (name === 'EXDATE') val.split(',').forEach(function (v) { cur.exdate.push(icsTime_(head, v).key); });
+    else if (name === 'SUMMARY') cur.title = icsText_(val);
+    else if (name === 'LOCATION') cur.location = icsText_(val);
+    else if (name === 'DESCRIPTION') cur.desc = icsText_(val).slice(0, 4000);
+    else if (name === 'UID') cur.uid = val;
+    else if (name === 'RRULE') cur.rrule = val;
+    else if (name === 'STATUS') cur.status = val.toUpperCase();
+    else if (name === 'X-MICROSOFT-CDO-ALLDAYEVENT') cur.allDay = /TRUE/i.test(val);
+  });
+  return out.filter(function (e) {
+    return e.DTSTART && e.uid && e.status !== 'CANCELLED' && !/^(canceled|cancelled):/i.test(e.title || '');
+  });
+}
+
+// A wall-clock time: { d: 'yyyyMMdd', t: 'HHmmss' | '', tz: IANA | 'UTC', key }
+function icsTime_(head, raw) {
+  raw = String(raw).trim();
+  var d = raw.slice(0, 8), t = raw.length >= 15 ? raw.slice(9, 15) : '';
+  var tz = /Z$/.test(raw) ? 'UTC' : null;
+  if (!tz) {
+    var m = head.match(/TZID=("?)([^";:]+)\1/i);
+    tz = m ? (WIN_TZ[m[2]] || (/\//.test(m[2]) ? m[2] : tz_())) : tz_();
+  }
+  if (/VALUE=DATE(?!-)/i.test(head) || raw.length === 8) t = '';
+  return { d: d, t: t, tz: tz, key: d + (t ? 'T' + t : '') };
+}
+
+function wallMs_(d, t, tz) {
+  return Utilities.parseDate(d + 'T' + (t || '000000'), tz, "yyyyMMdd'T'HHmmss").getTime();
+}
+
+function ymdAdd_(d, n) {
+  var x = new Date(Date.UTC(+d.slice(0, 4), +d.slice(4, 6) - 1, +d.slice(6, 8) + n));
+  return x.getUTCFullYear() + ('0' + (x.getUTCMonth() + 1)).slice(-2) + ('0' + x.getUTCDate()).slice(-2);
+}
+function dayNum_(d) { return Math.round(Date.UTC(+d.slice(0, 4), +d.slice(4, 6) - 1, +d.slice(6, 8)) / 86400000); }
+
+// Expands one RRULE into wall-clock start dates (yyyyMMdd) up to `lastDay`.
+function expandRule_(ev, lastDay) {
+  var r = {};
+  ev.rrule.split(';').forEach(function (p) { var kv = p.split('='); r[kv[0].toUpperCase()] = kv[1]; });
+  var freq = r.FREQ, interval = +(r.INTERVAL || 1), count = r.COUNT ? +r.COUNT : 0;
+  var start = ev.DTSTART.d, s0 = dayNum_(start), sd = new Date(s0 * 86400000);
+  var until = '';
+  if (r.UNTIL) {
+    var u = icsTime_(/Z$/.test(r.UNTIL) ? '' : 'TZID=' + ev.DTSTART.tz, r.UNTIL);
+    until = u.t ? Utilities.formatDate(new Date(wallMs_(u.d, u.t, u.tz)), ev.DTSTART.tz, 'yyyyMMdd') : u.d;
+  }
+  var DAYS = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+  var byday = (r.BYDAY || '').split(',').filter(String).map(function (x) {
+    var m = x.match(/^([+-]?\d+)?([A-Z]{2})$/); return { n: m && m[1] ? +m[1] : 0, wd: m ? DAYS.indexOf(m[2]) : -1 };
+  });
+  var bymd = r.BYMONTHDAY ? r.BYMONTHDAY.split(',').map(Number) : [];
+  var bymonth = r.BYMONTH ? r.BYMONTH.split(',').map(Number) : [];
+  var wkst = DAYS.indexOf(r.WKST || 'MO');
+  var weekStart0 = s0 - ((sd.getUTCDay() - wkst + 7) % 7);
+  var out = [], n = 0, end = dayNum_(lastDay), stop = until ? Math.min(end, dayNum_(until)) : end;
+  if (count) stop = Math.max(stop, s0 + 3660); // COUNT needs counting from the start
+  for (var dn = s0; dn <= stop && dn - s0 < 3660; dn++) {
+    var dt = new Date(dn * 86400000), wd = dt.getUTCDay(), md = dt.getUTCDate(), mo = dt.getUTCMonth() + 1;
+    var y = dt.getUTCFullYear(), dim = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+    var nth = Math.ceil(md / 7), nthLast = -Math.ceil((dim - md + 1) / 7);
+    var dayMatch = function () {
+      return byday.some(function (b) { return b.wd === wd && (!b.n || b.n === nth || b.n === nthLast); });
+    };
+    var ok = false;
+    if (freq === 'DAILY') ok = (dn - s0) % interval === 0 && (!byday.length || dayMatch());
+    else if (freq === 'WEEKLY') ok = Math.floor((dn - weekStart0) / 7) % interval === 0 && (byday.length ? dayMatch() : wd === sd.getUTCDay());
+    else if (freq === 'MONTHLY') {
+      var months = (y - sd.getUTCFullYear()) * 12 + (mo - 1 - sd.getUTCMonth());
+      ok = months % interval === 0 && (bymd.length ? bymd.indexOf(md) >= 0 || bymd.indexOf(md - dim - 1) >= 0 : byday.length ? dayMatch() : md === sd.getUTCDate());
+    } else if (freq === 'YEARLY') {
+      ok = (y - sd.getUTCFullYear()) % interval === 0 && (bymonth.length ? bymonth.indexOf(mo) >= 0 : mo === sd.getUTCMonth() + 1) &&
+        (byday.length ? dayMatch() : bymd.length ? bymd.indexOf(md) >= 0 : md === sd.getUTCDate());
+    }
+    if (!ok) continue;
+    n++;
+    if (count && n > count) break;
+    var ds = new Date(dn * 86400000), key = ds.getUTCFullYear() + ('0' + (ds.getUTCMonth() + 1)).slice(-2) + ('0' + ds.getUTCDate()).slice(-2);
+    if (dn <= end && (!until || dn <= dayNum_(until))) out.push(key);
+  }
+  return out;
+}
+
+function outlookEvents_(from, to) {
+  var raw = outlookRaw_(), tz = tz_();
+  var overrides = {};
+  raw.forEach(function (e) { if (e['RECURRENCE-ID']) overrides[e.uid + '|' + e['RECURRENCE-ID'].d] = true; });
+  var lastDay = Utilities.formatDate(new Date(to), tz, 'yyyyMMdd');
+  var out = [];
+  raw.forEach(function (e) {
+    var allDay = e.allDay || !e.DTSTART.t;
+    var st = e.DTSTART, en = e.DTEND || st;
+    var durMs = allDay ? 0 : wallMs_(en.d, en.t, en.tz) - wallMs_(st.d, st.t, st.tz);
+    var durDays = allDay ? Math.max(1, dayNum_(en.d) - dayNum_(st.d)) : 0;
+    var days = e.rrule && !e['RECURRENCE-ID'] ? expandRule_(e, lastDay) : [st.d];
+    days.forEach(function (d) {
+      if (e.rrule && !e['RECURRENCE-ID']) {
+        if (e.exdate.indexOf(d + (st.t ? 'T' + st.t : '')) >= 0 || e.exdate.indexOf(d) >= 0) return;
+        if (overrides[e.uid + '|' + d]) return; // replaced by a moved/edited instance
+      }
+      var s, x;
+      if (allDay) {
+        s = d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8);
+        var ed = ymdAdd_(d, durDays);
+        x = ed.slice(0, 4) + '-' + ed.slice(4, 6) + '-' + ed.slice(6, 8);
+        var sMs = wallMs_(d, '', tz), eMs = wallMs_(ed, '', tz);
+        if (eMs <= from || sMs >= to) return;
+      } else {
+        s = wallMs_(d, st.t, st.tz); x = s + durMs;
+        if (x <= from || s >= to) return;
+      }
+      var join = (e.desc || '').match(/https:\/\/teams\.microsoft\.com\/l\/meetup-join\/[^\s<>"]+/);
+      out.push({
+        id: 'outlook:' + e.uid + ':' + d, title: e.title || '(No title)', allDay: allDay, start: s, end: x,
+        location: e.location || '', notes: (e.desc || '').replace(/_{5,}[\s\S]*$/, '').trim().slice(0, 1000),
+        recurring: !!e.rrule || !!e['RECURRENCE-ID'], source: 'outlook', readonly: true, join: join ? join[0] : ''
+      });
+    });
+  });
+  return out;
 }
