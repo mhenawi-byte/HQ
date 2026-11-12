@@ -480,6 +480,12 @@ function viewToday() {
   const scheduleCard = `
     <div class="card">
       <div class="card-head"><span class="eyebrow">Schedule</span><a class="btn ghost small" href="#calendar">Calendar</a></div>
+      ${connected() ? `
+      <form class="addbar quick-event" data-form="event-quick" autocomplete="off">
+        <input name="text" placeholder="Add to calendar: gym tomorrow 6pm" aria-label="Quick add a calendar event" enterkeyhint="done">
+        <button type="button" class="btn icon-only" data-act="event-full" aria-label="Open full event form" title="More options">${ICON.calendar}</button>
+        <button class="btn primary" type="submit" aria-label="Add event">${ICON.plus}</button>
+      </form>` : ''}
       ${d.sched.length
         ? `<ul class="list">${scheduleRows(d.t)}</ul>`
         : `<div class="empty">${connected() ? 'No events or classes today.' : 'No classes today. Connect Google in <a href="#settings">Settings</a> to see your calendar here.'}</div>`}
@@ -1891,6 +1897,12 @@ const actions = {
     if (d.getMonth() !== calM) { calM = d.getMonth(); calY = d.getFullYear(); }
     render();
   },
+  'event-full'(el) {
+    calSel = todayISO();
+    const text = el.closest('form')?.elements.text?.value.trim();
+    openSheet(eventForm());
+    if (text) { const t = $('#sheet [name=title]'); if (t) t.value = text; }
+  },
   'new-event'() {
     if (!connected()) { toast('DARKO › Connect Google in Settings first.'); return; }
     openSheet(eventForm());
@@ -2077,6 +2089,35 @@ document.addEventListener('submit', async (e) => {
     case 'settings': {
       S.settings = { ...S.settings, name: val('name'), updated: now };
       commit(); toast('DARKO › Profile saved.');
+      break;
+    }
+    case 'event-quick': {
+      const text = val('text');
+      if (!text) return;
+      if (!connected()) { toast('DARKO › Connect Google in Settings first.'); return; }
+      const when = parseWhen(text);
+      const date = when.due || todayISO();
+      const tm = parseTimes(when.rest);
+      const title = cap((tm ? tm.rest : when.rest).replace(/^(?:add|schedule|put)\s+/i, '').replace(/\s+(?:on|at)$/i, '').trim());
+      if (!title) { toast('DARKO › What should I call it?'); return; }
+      const d = parse(date);
+      const ev = { title, location: '', notes: '', allDay: !tm };
+      if (tm) {
+        ev.start = new Date(d.getFullYear(), d.getMonth(), d.getDate(), tm.start[0], tm.start[1]).getTime();
+        ev.end = tm.end ? new Date(d.getFullYear(), d.getMonth(), d.getDate(), tm.end[0], tm.end[1]).getTime() : ev.start + 3600000;
+        if (ev.end <= ev.start) ev.end = ev.start + 3600000;
+      } else { ev.start = date; ev.end = date; }
+      f.reset();
+      btn.disabled = true;
+      try {
+        await call('createEvent', { event: ev });
+        const dayLabel = date === todayISO() ? 'today' : date === addDays(todayISO(), 1) ? 'tomorrow' : parse(date).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+        toast(`DARKO › Added "${title}" ${dayLabel}${tm ? ` at ${fmtTime(ev.start)}` : ', all day'}.`, 4000);
+        reloadEventsAround(date);
+      } catch (err) {
+        toast(`Calendar: ${err.message}`, 6000);
+      }
+      btn.disabled = false;
       break;
     }
     case 'event': {
@@ -2438,6 +2479,33 @@ function darkoAsk(q) {
 
 const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 // Pull a date out of a sentence: "tomorrow", "friday", "in 3 days", "today".
+// "6pm", "at 6:30", "18:00", "6-7pm", "from 2 to 3:30pm" → { start: [h, m], end: [h, m] | null, rest }
+function parseTimes(text) {
+  const re = /(\s(?:at|@|from))?\s(\d{1,2})(?::(\d{2}))?\s*(am|pm|a|p)?(?:\s*(?:-|–|to|until|till)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm|a|p)?)?(?=\s)/i;
+  const s = ` ${text} `;
+  const m = s.match(re);
+  if (!m) return null;
+  const [, pre, h1, m1, ap1, h2, m2, ap2] = m;
+  if (!pre && !ap1 && !ap2 && !m1) return null; // a bare number (e.g. "CS 2114") is not a time
+  const to24 = (h, ap, fallback) => {
+    h = Number(h);
+    ap = (ap || fallback || '').toLowerCase()[0];
+    if (ap === 'p' && h < 12) return h + 12;
+    if (ap === 'a' && h === 12) return 0;
+    if (!ap && h >= 1 && h <= 7) return h + 12; // "at 6" → 6 PM
+    return h;
+  };
+  const sh = to24(h1, ap1, ap2), sm = Number(m1 || 0);
+  if (sh > 23 || sm > 59) return null;
+  let end = null;
+  if (h2) {
+    let eh = to24(h2, ap2, ap1), em = Number(m2 || 0);
+    if (eh * 60 + em <= sh * 60 + sm && eh < 12) eh += 12;
+    if (eh <= 23) end = [eh, em];
+  }
+  return { start: [sh, sm], end, rest: s.replace(m[0], ' ').replace(/\s+/g, ' ').trim() };
+}
+
 function parseWhen(text) {
   const t = todayISO();
   let s = ` ${text} `;

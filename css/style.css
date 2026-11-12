@@ -871,3 +871,8 @@ a.wstat:hover { border-color: var(--line-strong); }
 .ro-line.muted { color: var(--muted); }
 .ro-notes { margin: 12px 0; padding: 10px 12px; border-radius: 10px; background: rgba(3, 6, 10, 0.5); border: 1px solid var(--line); font-size: 13px; color: var(--muted); white-space: pre-wrap; max-height: 30vh; overflow-y: auto; }
 .more-link { display: block; margin-top: 10px; font: 600 12px var(--mono); color: var(--accent-hi); }
+
+/* Quick add to calendar (Today) */
+.quick-event { margin-bottom: 12px; }
+.btn.icon-only { width: 44px; padding: 0; justify-content: center; flex-shrink: 0; }
+.btn.icon-only svg { width: 18px; height: 18px; }
