@@ -53,7 +53,9 @@ export async function call(action, payload = {}, conn = getConn()) {
 
 // Pairing link: lets your phone join with the same server + key (the key sits after #, so it is never sent to any server).
 export function pairingLink(conn = getConn()) {
-  const base = location.origin + location.pathname;
+  // Made on a local copy? Point the phone at the live site instead.
+  const local = /^(localhost|127\.|\[::1\])/.test(location.hostname);
+  const base = local ? 'https://mhenawi-byte.github.io/HQ/' : location.origin + location.pathname;
   return `${base}#pair=${btoa(JSON.stringify({ u: conn.url, k: conn.key }))}`;
 }
 export function readPairing(hash) {
