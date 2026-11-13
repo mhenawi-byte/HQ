@@ -1,6 +1,6 @@
 // HQ service worker: network-first so updates show up right away,
 // with a cached copy so the app still opens offline.
-const CACHE = 'hq-v13';
+const CACHE = 'hq-v14';
 const SHELL = [
   './', 'index.html', 'css/style.css', 'js/app.js', 'js/store.js', 'js/api.js', 'manifest.webmanifest',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',

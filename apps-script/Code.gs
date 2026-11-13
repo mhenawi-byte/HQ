@@ -61,6 +61,7 @@ function doPost(e) {
       case 'setOutlook': return json_({ ok: true, count: setOutlook_(req.url), status: status_() });
       case 'setWhoop': return json_({ ok: true, authUrl: setWhoop_(req) });
       case 'whoop': return json_({ ok: true, whoop: whoop_() });
+      case 'whoopHistory': return json_({ ok: true, history: whoopHistory_(req.days) });
       case 'disconnect': disconnect_(req.what); return json_({ ok: true, status: status_() });
       case 'setReminders': setReminders_(req.on, req.hour); return json_({ ok: true, status: status_() });
       case 'testReminder': return json_({ ok: true, sent: sendReminders(true) });
@@ -409,6 +410,49 @@ function whoop_() {
     cycles: cycles.map(function (c) {
       var s = c.score || {};
       return { start: c.start, end: c.end, state: c.score_state, strain: s.strain, kj: s.kilojoule };
+    }),
+  };
+}
+
+// Every record since `start`, following WHOOP's pages (25 per page).
+function whoopAll_(path, start) {
+  var out = [], token = '';
+  for (var i = 0; i < 12; i++) {
+    var res = UrlFetchApp.fetch(WHOOP_API + path + '?limit=25&start=' + encodeURIComponent(start) + (token ? '&nextToken=' + encodeURIComponent(token) : ''), {
+      headers: { Authorization: 'Bearer ' + whoopToken_() },
+      muteHttpExceptions: true,
+    });
+    if (res.getResponseCode() !== 200) throw new Error('WHOOP ' + path + ' returned ' + res.getResponseCode());
+    var body = JSON.parse(res.getContentText());
+    out = out.concat(body.records || []);
+    token = body.next_token;
+    if (!token) break;
+  }
+  return out;
+}
+
+// Daily history for the Health charts (up to 90 days).
+function whoopHistory_(days) {
+  if (!PROPS.getProperty('WHOOP_REFRESH')) return null;
+  days = Math.max(7, Math.min(90, Math.round(Number(days) || 30)));
+  var start = new Date(Date.now() - (days + 1) * 86400000).toISOString();
+  return {
+    days: days,
+    recovery: whoopAll_('/recovery', start).filter(function (r) { return r.score_state === 'SCORED'; }).map(function (r) {
+      var s = r.score || {};
+      return { at: r.created_at, recovery: s.recovery_score, rhr: s.resting_heart_rate, hrv: s.hrv_rmssd_milli, spo2: s.spo2_percentage, skin: s.skin_temp_celsius };
+    }),
+    sleep: whoopAll_('/activity/sleep', start).filter(function (s) { return !s.nap && s.score_state === 'SCORED'; }).map(function (s) {
+      var sc = s.score || {}, st = sc.stage_summary || {};
+      return {
+        end: s.end,
+        deep: st.total_slow_wave_sleep_time_milli || 0, rem: st.total_rem_sleep_time_milli || 0, light: st.total_light_sleep_time_milli || 0,
+        performance: sc.sleep_performance_percentage, resp: sc.respiratory_rate,
+      };
+    }),
+    cycles: whoopAll_('/cycle', start).filter(function (c) { return c.score_state === 'SCORED'; }).map(function (c) {
+      var s = c.score || {};
+      return { start: c.start, strain: s.strain, kj: s.kilojoule, avgHr: s.average_heart_rate };
     }),
   };
 }

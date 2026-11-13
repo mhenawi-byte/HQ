@@ -876,3 +876,20 @@ a.wstat:hover { border-color: var(--line-strong); }
 .quick-event { margin-bottom: 12px; }
 .btn.icon-only { width: 44px; padding: 0; justify-content: center; flex-shrink: 0; }
 .btn.icon-only svg { width: 18px; height: 18px; }
+
+/* Health (WHOOP charts) */
+.range { display: flex; border: 1px solid var(--line-strong); border-radius: 10px; overflow: hidden; }
+.range button { background: none; border: 0; color: var(--muted); font: 600 12px/1 var(--mono); letter-spacing: 0.08em; padding: 0 12px; height: 38px; cursor: pointer; }
+.range button.on { color: #fff; background: rgba(59, 156, 255, 0.2); }
+.hbig { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.hbig b { font: 800 28px/1 var(--sans); }
+.hbig span { font-size: 13px; color: var(--muted); }
+.hchart { display: block; width: 100%; height: auto; overflow: visible; }
+.hchart text { font: 600 9px/1 var(--mono); fill: var(--dim); letter-spacing: 0.04em; }
+.hchart .grid { stroke: var(--line-strong); stroke-width: 1; }
+.hchart .avg { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 4; opacity: 0.7; }
+.hchart .hit { fill: transparent; cursor: pointer; }
+.hchart .hit.on { fill: rgba(134, 197, 255, 0.12); }
+.hreadout { margin-top: 6px; font: 600 12px/1.4 var(--mono); color: var(--accent-hi); min-height: 17px; }
+.hlegend { display: flex; gap: 14px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.hlegend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }

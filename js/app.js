@@ -1,7 +1,7 @@
 import { load, save, uid, defaults, merge, STORAGE_KEY, COLLECTIONS, SETTING_DEFAULTS } from './store.js';
 import { getConn, setConn, connected, getCache, setCache, clearCache, newKey, call, pairingLink, readPairing } from './api.js';
 
-const VERSION = '0.3.1';
+const VERSION = '0.4.0';
 let S = load();
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -87,6 +87,7 @@ const ICON = {
   fuel: svg('<path d="M12 3c1.2 3.6 5.5 5.6 5.5 10.2a5.5 5.5 0 0 1-11 0c0-2.6 1.5-4.2 2.6-5.2.3 1.7 1 2.7 2.1 3.1-.1-3.2.6-5.6.8-8.1z"/>'),
   money: svg('<rect x="3" y="6" width="18" height="12" rx="2.5"/><circle cx="12" cy="12" r="2.6"/><path d="M6.5 9.5v5M17.5 9.5v5"/>'),
   focus: svg('<circle cx="12" cy="13.5" r="7.5"/><path d="M12 9.5v4l2.6 2M9.5 2.8h5M12 2.8v3.2"/>'),
+  health: svg('<path d="M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7a4.3 4.3 0 0 1 7.5 2.8C19.5 15.4 12 20 12 20z"/><path d="M3 12.5h4.5l1.5-2.5 2.5 5 1.5-2.5H21"/>'),
   journal: svg('<path d="M6 3.5h11a1.5 1.5 0 0 1 1.5 1.5v15.5H7.5A1.5 1.5 0 0 1 6 19V3.5z"/><path d="M6 17.5h12.5M9.5 8h5.5M9.5 11h4"/>'),
   more: svg('<rect x="4" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.6"/>'),
   mic: svg('<rect x="9" y="3" width="6" height="11.5" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"/>'),
@@ -104,6 +105,7 @@ const TABS = [
   { id: 'grocery', label: 'Grocery' },
   { id: 'personal', label: 'Personal' },
   { id: 'fuel', label: 'Fuel', phone: true },
+  { id: 'health', label: 'Health' },
   { id: 'money', label: 'Money' },
   { id: 'focus', label: 'Focus' },
   { id: 'journal', label: 'Journal' },
@@ -270,6 +272,164 @@ function whoopNow() {
 }
 const recColor = (n) => (n >= 67 ? 'var(--ok)' : n >= 34 ? 'var(--soon)' : 'var(--late)');
 const hrsMin = (ms) => `${Math.floor(ms / 3600000)}h ${pad(Math.round((ms % 3600000) / 60000))}m`;
+
+/* ---------------- Health (WHOOP history charts) ---------------- */
+
+const HEALTH_DAYS_KEY = 'hq.healthDays';
+let healthDays = (() => { try { return +localStorage.getItem(HEALTH_DAYS_KEY) || 30; } catch { return 30; } })();
+let histLoading = false;
+
+async function loadWhoopHistory({ announce = false } = {}) {
+  if (histLoading) return;
+  histLoading = true;
+  try {
+    const { history } = await call('whoopHistory', { days: 90 });
+    setCache({ whoopHist: history, whoopHistAt: Date.now(), whoopHistError: '' });
+    if (announce) toast('DARKO › Health data refreshed.');
+  } catch (e) {
+    const old = /Unknown action/.test(e.message);
+    setCache({ whoopHistError: old ? 'old-server' : e.message });
+    if (announce) toast(`WHOOP: ${old ? 'update your HQ server code first.' : e.message}`);
+  }
+  histLoading = false;
+  softRender();
+}
+
+// One value per day for the last `n` days (oldest first). WHOOP records are newest first, so the newest of a day wins.
+function healthSeries(n) {
+  const h = getCache().whoopHist;
+  const t = todayISO();
+  const days = Array.from({ length: n }, (_, i) => addDays(t, i - n + 1));
+  const by = (list, dayOf) => {
+    const m = {};
+    (list || []).forEach((r) => { const d = dayOf(r); if (!(d in m)) m[d] = r; });
+    return m;
+  };
+  const rec = by(h?.recovery, (r) => isoOf(new Date(r.at)));
+  const sl = by(h?.sleep, (r) => isoOf(new Date(r.end)));
+  // A WHOOP day starts when you fall asleep the night before, so count it on the day 12 hours later.
+  const cyc = by(h?.cycles, (r) => isoOf(new Date(Date.parse(r.start) + 12 * 3600000)));
+  const v = (x) => (typeof x === 'number' && Number.isFinite(x) ? x : null);
+  return days.map((d) => ({
+    d,
+    recovery: v(rec[d]?.recovery),
+    hrv: v(rec[d]?.hrv),
+    rhr: v(rec[d]?.rhr),
+    sleep: sl[d] ? [sl[d].deep, sl[d].rem, sl[d].light].map((x) => x || 0) : null,
+    perf: v(sl[d]?.performance),
+    strain: v(cyc[d]?.strain),
+    kcal: cyc[d] && v(cyc[d].kj) != null ? cyc[d].kj / 4.184 : null,
+  }));
+}
+
+const shortDay = (d) => parse(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+// Small SVG chart: bars (optionally stacked) or a line, with an average line and tap targets.
+function hChart({ data, get, type = 'bar', color = 'var(--accent)', colorOf, stack, fmt, lo, hi }) {
+  const W = 320, H = 120, top = 8, bottom = 18, ch = H - top - bottom;
+  const n = data.length, step = W / n;
+  const val = (p) => { const x = get(p); return Array.isArray(x) ? x.reduce((a, b) => a + b, 0) : x; };
+  const vals = data.map(val).filter((x) => x != null);
+  if (!vals.length) return '<div class="empty">No data in this range yet.</div>';
+  let min = lo ?? 0, max = hi ?? Math.max(...vals);
+  if (lo == null && type === 'line') { min = Math.min(...vals); const padv = Math.max(1, (max - min) * 0.25); min = Math.max(0, min - padv); max += padv; }
+  if (hi == null) max = max === min ? min + 1 : max * (type === 'line' ? 1 : 1.08);
+  const y = (x) => top + ch - ((x - min) / (max - min)) * ch;
+  const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+  let marks = '';
+  if (type === 'bar') {
+    const bw = Math.max(1.5, step * (n > 40 ? 0.6 : 0.66));
+    data.forEach((p, i) => {
+      const x0 = i * step + (step - bw) / 2;
+      const raw = get(p);
+      if (raw == null) return;
+      if (stack) {
+        let base = top + ch;
+        raw.forEach((part, k) => {
+          const h = (part / (max - min)) * ch;
+          base -= h;
+          marks += `<rect x="${x0.toFixed(1)}" y="${base.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, h).toFixed(1)}" fill="${stack[k]}" />`;
+        });
+      } else {
+        const yy = y(raw);
+        marks += `<rect x="${x0.toFixed(1)}" y="${yy.toFixed(1)}" width="${bw.toFixed(1)}" height="${(top + ch - yy).toFixed(1)}" rx="${Math.min(2, bw / 3).toFixed(1)}" fill="${colorOf ? colorOf(raw) : color}" />`;
+      }
+    });
+  } else {
+    const pts = data.map((p, i) => (get(p) == null ? null : [i * step + step / 2, y(get(p))]));
+    let path = '', open = false;
+    pts.forEach((pt) => { if (!pt) { open = false; return; } path += `${open ? 'L' : 'M'}${pt[0].toFixed(1)},${pt[1].toFixed(1)}`; open = true; });
+    marks += `<path d="${path}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />`;
+    if (n <= 31) pts.forEach((pt) => { if (pt) marks += `<circle cx="${pt[0].toFixed(1)}" cy="${pt[1].toFixed(1)}" r="2.6" fill="${color}" />`; });
+  }
+  const ya = y(avg).toFixed(1);
+  const labels = [0, Math.floor((n - 1) / 2), n - 1].map((i, k) =>
+    `<text x="${(i * step + step / 2).toFixed(1)}" y="${H - 4}" text-anchor="${['start', 'middle', 'end'][k]}">${esc(shortDay(data[i].d))}</text>`).join('');
+  const hits = data.map((p, i) => {
+    const raw = get(p);
+    const tip = `${shortDay(p.d)} · ${raw == null ? 'no data' : fmt(raw, p)}`;
+    return `<rect class="hit" x="${(i * step).toFixed(1)}" y="0" width="${step.toFixed(1)}" height="${H - bottom}" data-act="hpt" data-tip="${esc(tip)}"><title>${esc(tip)}</title></rect>`;
+  }).join('');
+  return `<svg class="hchart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Average ${esc(fmt(avg))}">
+    <line class="grid" x1="0" x2="${W}" y1="${top + ch}" y2="${top + ch}" />
+    ${marks}
+    <line class="avg" x1="0" x2="${W}" y1="${ya}" y2="${ya}" />
+    ${labels}${hits}</svg>`;
+}
+
+function healthCard({ title, unit, data, get, latestFmt, avgFmt, legend = '', ...opt }) {
+  const val = (p) => { const x = get(p); return Array.isArray(x) ? x.reduce((a, b) => a + b, 0) : x; };
+  const vals = data.map(val).filter((x) => x != null);
+  const last = [...data].reverse().find((p) => val(p) != null);
+  const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  return `<div class="card hcard">
+    <div class="card-head"><span class="eyebrow">${title}</span><span class="count">${avg != null ? `AVG ${esc(avgFmt(avg))}` : ''}</span></div>
+    <div class="hbig"><b ${opt.colorOf && last ? `style="color:${opt.colorOf(val(last))}"` : ''}>${last ? esc(latestFmt(val(last), last)) : '–'}</b><span>${last ? (last.d === todayISO() ? 'today' : esc(shortDay(last.d))) : ''}${unit ? ` · ${unit}` : ''}</span></div>
+    ${hChart({ data, get, fmt: (x, p) => latestFmt(x, p), ...opt })}
+    ${legend}
+    <div class="hreadout">Tap a day for details.</div>
+  </div>`;
+}
+
+function viewHealth() {
+  const c = getCache(), st = c.status || {};
+  const head = (actions = '') => `<header class="page-head"><div><div class="eyebrow">Biometrics · WHOOP</div><h1>Health</h1></div><div class="actions">${actions}</div></header>`;
+  if (!connected() || !st.whoop) {
+    return `${head()}<div class="card"><div class="empty">Connect WHOOP in <a href="#settings">Settings</a> to see your sleep, recovery, HRV and strain trends here.</div></div>`;
+  }
+  if (!histLoading && (!c.whoopHist || Date.now() - (c.whoopHistAt || 0) > 30 * 60000) && c.whoopHistError !== 'old-server') setTimeout(loadWhoopHistory, 0);
+  const range = `<div class="range" role="group" aria-label="Range">${[7, 30, 90].map((n) => `<button class="${n === healthDays ? 'on' : ''}" data-act="health-range" data-days="${n}" aria-pressed="${n === healthDays}">${n}D</button>`).join('')}</div>
+    <button class="icon-btn" data-act="health-now" aria-label="Refresh">${ICON.sync}</button>`;
+  if (c.whoopHistError === 'old-server') {
+    return `${head(range)}<div class="card"><div class="card-head"><span class="eyebrow">Server update needed</span></div>
+      <ol class="steps">
+        <li>On your laptop: <b>Settings → Connections → Copy server code</b>.</li>
+        <li>In <a href="https://script.google.com" target="_blank" rel="noopener">Apps Script</a>, replace everything in <b>Code.gs</b> with it and press ⌘S.</li>
+        <li><b>Deploy → Manage deployments</b> → pencil ✎ → Version: <b>New version</b> → Deploy.</li>
+        <li>Come back and tap <button class="linkish" data-act="health-now">try again</button>.</li>
+      </ol></div>`;
+  }
+  if (!c.whoopHist) {
+    return `${head(range)}<div class="card"><div class="empty">${c.whoopHistError ? esc(c.whoopHistError) : 'Pulling your WHOOP history…'}</div></div>`;
+  }
+  const data = healthSeries(healthDays);
+  const pct = (x) => `${Math.round(x)}%`;
+  const STAGES = ['var(--accent-deep)', '#8b7bff', 'var(--accent-hi)'];
+  const sleepTip = (x, p) => (p && p.sleep ? `${hrsMin(x)} (deep ${hrsMin(p.sleep[0])}, REM ${hrsMin(p.sleep[1])}${p.perf != null ? `, ${Math.round(p.perf)}% performance` : ''})` : hrsMin(x));
+  const perfs = data.map((p) => p.perf).filter((x) => x != null);
+  return `${head(range)}
+  ${c.whoopHistError ? `<div class="banner">${esc(c.whoopHistError)}</div>` : ''}
+  <div class="grid two">
+    ${healthCard({ title: 'Recovery', unit: '', data, get: (p) => p.recovery, latestFmt: pct, avgFmt: pct, lo: 0, hi: 100, colorOf: recColor })}
+    ${healthCard({ title: 'Sleep', unit: perfs.length ? `avg ${Math.round(perfs.reduce((a, b) => a + b, 0) / perfs.length)}% performance` : '', data, get: (p) => p.sleep, stack: STAGES, latestFmt: (x, p) => (p ? sleepTip(x, p) : hrsMin(x)).split(' (')[0], avgFmt: hrsMin,
+      legend: `<div class="hlegend"><span><i style="background:${STAGES[0]}"></i>Deep</span><span><i style="background:${STAGES[1]}"></i>REM</span><span><i style="background:${STAGES[2]}"></i>Light</span></div>` })}
+    ${healthCard({ title: 'HRV', unit: 'ms', data, get: (p) => p.hrv, type: 'line', color: 'var(--ok)', latestFmt: (x) => `${Math.round(x)}`, avgFmt: (x) => `${Math.round(x)} ms` })}
+    ${healthCard({ title: 'Resting heart rate', unit: 'bpm', data, get: (p) => p.rhr, type: 'line', color: 'var(--late)', latestFmt: (x) => `${Math.round(x)}`, avgFmt: (x) => `${Math.round(x)} bpm` })}
+    ${healthCard({ title: 'Strain', unit: 'out of 21', data, get: (p) => p.strain, lo: 0, hi: 21, color: 'var(--accent)', latestFmt: (x) => x.toFixed(1), avgFmt: (x) => x.toFixed(1) })}
+    ${healthCard({ title: 'Calories burned', unit: 'kcal', data, get: (p) => p.kcal, color: 'var(--soon)', latestFmt: (x) => `${Math.round(x).toLocaleString()}`, avgFmt: (x) => `${Math.round(x).toLocaleString()}` })}
+  </div>
+  <p class="hint" style="margin-top:14px">WHOOP doesn't share step counts with other apps, so steps aren't here. Dashed line = average for the range.</p>`;
+}
 
 /* ---------------- Sync engine ---------------- */
 
@@ -493,7 +653,7 @@ function viewToday() {
 
   const whoopCard = connected() && st.whoop ? `
     <div class="card">
-      <div class="card-head"><span class="eyebrow">WHOOP</span><span class="count">${getCache().whoopAt ? ago(getCache().whoopAt).toUpperCase() : ''}</span></div>
+      <div class="card-head"><span class="eyebrow">WHOOP</span><a class="btn ghost small" href="#health">Trends</a></div>
       ${w && w.rec ? `
         <div class="whoop">
           <div class="wstat"><b style="color:${recColor(w.rec.recovery)}">${Math.round(w.rec.recovery)}%</b><span>Recovery</span></div>
@@ -1562,6 +1722,7 @@ function viewMore() {
   const tiles = [
     ['grocery', 'Grocery', `${S.grocery.filter((g) => !g.done).length} to buy`],
     ['personal', 'Personal', `${S.personal.filter((x) => !x.done).length} open · habits ${S.habits.filter((h) => h.log[t]).length}/${S.habits.length}`],
+    ['health', 'Health', getCache().status?.whoop ? 'WHOOP trends' : 'Connect WHOOP in Settings'],
     ['money', 'Money', budget ? `${usd(m.spent)} of ${usd(budget)}` : `${usd(m.spent)} this month`],
     ['focus', 'Focus', timer.phase !== 'idle' ? `Running · ${clock(timerLeft(timer))}` : `${focusMinutes(t)} min today`],
     ['journal', 'Journal', jr && jr.text.trim() ? 'Written today ✓' : 'Not written yet'],
@@ -1628,7 +1789,7 @@ function darkoLogHtml() {
 
 const VIEWS = {
   today: viewToday, school: viewSchool, calendar: viewCalendar, grocery: viewGrocery, personal: viewPersonal,
-  fuel: viewFuel, money: viewMoney, focus: viewFocus, journal: viewJournal, settings: viewSettings, more: viewMore,
+  fuel: viewFuel, health: viewHealth, money: viewMoney, focus: viewFocus, journal: viewJournal, settings: viewSettings, more: viewMore,
 };
 
 /* ---------------- Render ---------------- */
@@ -1985,6 +2146,18 @@ const actions = {
     try { const { status } = await call('disconnect', { what: 'canvas' }); setCache({ status, canvasError: '' }); render(); } catch (e) { toast(e.message); }
   },
   'whoop-now'() { loadWhoop({ announce: true }); },
+  hpt(el) {
+    const card = el.closest('.card');
+    card.querySelectorAll('.hit.on').forEach((x) => x.classList.remove('on'));
+    el.classList.add('on');
+    card.querySelector('.hreadout').textContent = el.dataset.tip;
+  },
+  'health-range'(el) {
+    healthDays = +el.dataset.days;
+    try { localStorage.setItem(HEALTH_DAYS_KEY, String(healthDays)); } catch {}
+    render();
+  },
+  'health-now'() { setCache({ whoopHistError: '' }); loadWhoopHistory({ announce: true }); render(); },
   async 'disconnect-whoop'() {
     if (!confirm('Disconnect WHOOP?')) return;
     try { const { status } = await call('disconnect', { what: 'whoop' }); setCache({ status, whoop: null, whoopError: '' }); render(); } catch (e) { toast(e.message); }
