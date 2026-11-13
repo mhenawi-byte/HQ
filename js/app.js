@@ -1,7 +1,7 @@
 import { load, save, uid, defaults, merge, STORAGE_KEY, COLLECTIONS, SETTING_DEFAULTS } from './store.js';
 import { getConn, setConn, connected, getCache, setCache, clearCache, newKey, call, pairingLink, readPairing } from './api.js';
 
-const VERSION = '0.3.0';
+const VERSION = '0.3.1';
 let S = load();
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -508,8 +508,22 @@ function viewToday() {
   const journalNudge = new Date().getHours() >= 18 && !(jr && jr.text.trim())
     ? `<a class="banner nudge" href="#journal">${ICON.journal}<span><b>DARKO ›</b> Today's journal is still empty. Two minutes, then you're done.</span></a>` : '';
 
+  // iPhone home-screen apps keep their own storage, separate from Safari, so pairing in Safari doesn't carry over.
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  const pairCard = !connected() && standalone ? `
+    <div class="card">
+      <div class="card-head"><span class="eyebrow">Connect this app</span><span class="status off">OFFLINE</span></div>
+      <p class="hint" style="margin:0 0 12px">The home-screen app is separate from Safari, so it needs its own pairing. On your laptop: <b>Settings → Pair your phone → Copy link</b>, send it to your phone, copy it, then tap Paste here.</p>
+      <div class="btn-row" style="margin-bottom:10px"><button class="btn small primary" data-act="paste-pair">Paste pairing link</button></div>
+      <form class="addbar" data-form="connect-google" autocomplete="off">
+        <input name="url" type="text" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="…or paste the link here" aria-label="Pairing link" required>
+        <button class="btn primary" type="submit">Connect</button>
+      </form>
+    </div>` : '';
+
   return `
   ${journalNudge}
+  ${pairCard}
   <section class="hero">
     <div>
       <div class="eyebrow">${esc(dateStr)}</div>
@@ -905,7 +919,7 @@ function viewSettings() {
       <ol class="steps">
         <li>Open HQ in <b>Safari</b>.</li>
         <li>Tap <b>Share</b> → <b>Add to Home Screen</b>.</li>
-        <li>Open it from the home screen, then use <b>Pair your phone</b> from your laptop to sync.</li>
+        <li>Open HQ <b>from the home screen</b> and paste the pairing link from your laptop (<b>Pair your phone</b>) into the box on Today. Pairing in Safari doesn't carry over to the home-screen app.</li>
       </ol>
     </div>
 
@@ -1946,6 +1960,13 @@ const actions = {
       <div class="sheet-actions"><button class="btn primary" data-act="copy-pair">Copy link</button></div>`, { focus: false });
   },
   'copy-pair'() { copy(pairingLink(), 'Pairing link copied.'); },
+  async 'paste-pair'() {
+    let text = '';
+    try { text = await navigator.clipboard.readText(); } catch {}
+    if (!text) { toast('Could not read the clipboard. Long-press the box below and choose Paste.', 6000); return; }
+    if (!text.includes('#pair=')) { toast('That isn\'t a pairing link. Copy it from your laptop: Settings → Pair your phone.', 6000); return; }
+    await handlePairing(text.slice(text.indexOf('#pair=')));
+  },
   'disconnect-google'() {
     if (!confirm('Disconnect this device from Google? Your data stays here and in your Drive.')) return;
     setConn(null); clearCache(); loadedMonths.clear(); setSync('off'); render();

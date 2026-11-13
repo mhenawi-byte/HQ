@@ -34,8 +34,10 @@ Deploy → **Manage deployments** → pencil ✎ → Version: **New version** �
 
 1. Put HQ online (GitHub Pages) and open it in **Safari** on your iPhone.
 2. **Share → Add to Home Screen**.
-3. On your laptop: **Settings → Pair your phone → Copy link**, and AirDrop or text it to yourself.
-4. Open that link on the phone **in Safari**. HQ connects and pulls in all your data.
+3. On your laptop: **Settings → Pair your phone → Copy link**, and AirDrop or text it to yourself. On the phone, copy the link (don't open it).
+4. Open HQ **from the home screen** and tap **Paste pairing link** on Today (or paste it into **Settings → Connections → Google**). HQ connects and pulls in all your data.
+
+> The home-screen app has its own storage, separate from Safari. Pairing in Safari only connects Safari, so the home-screen app stays empty until you pair it too.
 
 Keep the pairing link private. Anyone who has it can read your HQ data.
 
