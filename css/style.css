@@ -28,7 +28,10 @@
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; }
+html, body { margin: 0; }
+/* iPhone home-screen apps with a see-through status bar measure 100% short by the status bar,
+   which lifts the bottom bar on short pages (like More). Adding the inset back keeps it pinned. */
+html { min-height: calc(100% + env(safe-area-inset-top)); }
 body {
   background: var(--bg);
   color: var(--text);
@@ -893,3 +896,7 @@ a.wstat:hover { border-color: var(--line-strong); }
 .hreadout { margin-top: 6px; font: 600 12px/1.4 var(--mono); color: var(--accent-hi); min-height: 17px; }
 .hlegend { display: flex; gap: 14px; margin-top: 8px; font-size: 12px; color: var(--muted); }
 .hlegend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+
+/* Journal submit row */
+.journal-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; }
+.journal-actions .hint { margin: 0; }

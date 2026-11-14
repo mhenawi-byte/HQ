@@ -1,7 +1,7 @@
 import { load, save, uid, defaults, merge, STORAGE_KEY, COLLECTIONS, SETTING_DEFAULTS } from './store.js';
 import { getConn, setConn, connected, getCache, setCache, clearCache, newKey, call, pairingLink, readPairing } from './api.js';
 
-const VERSION = '0.4.0';
+const VERSION = '0.4.1';
 let S = load();
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -1697,9 +1697,12 @@ function viewJournal() {
       <div class="card-head"><span class="eyebrow">${esc(parse(journalDay).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }))}</span><span class="count" id="jSaved">${words ? `${words} WORDS · SAVED` : ''}</span></div>
       <div class="moods" role="group" aria-label="Mood">${MOODS.map(([v, l]) => `<button class="mood m${v} ${j.mood === v ? 'on' : ''}" data-act="journal-mood" data-mood="${v}" aria-pressed="${j.mood === v}"><i></i>${l}</button>`).join('')}</div>
       <form data-form="journal" autocomplete="off">
-        <textarea name="text" class="journal-text" data-autosave="journal" rows="10" placeholder="${esc(prompt)}">${esc(j.text)}</textarea>
+        <textarea name="text" class="journal-text" data-autosave="journal" data-day="${journalDay}" rows="10" placeholder="${esc(prompt)}">${esc(j.text)}</textarea>
+        <div class="journal-actions">
+          <p class="hint">Saves as you type. ${journalDay === t ? 'A real entry also checks off your Journal habit.' : ''}</p>
+          <button class="btn primary" type="submit">${ICON.check}Submit ${journalDay === t ? "today's entry" : esc(shortDay(journalDay))}</button>
+        </div>
       </form>
-      <p class="hint" style="margin:8px 0 0">Saves as you type. ${journalDay === t ? 'A real entry also checks off your Journal habit.' : ''}</p>
     </div>
   </div>
   ${past.length ? `<div class="card" style="margin-top:14px">
@@ -1820,7 +1823,7 @@ function render() {
   renderNav(r);
   // Keep anything typed into forms on this page when it redraws (e.g. after a background sync).
   const kept = sameRoute ? [...view.querySelectorAll('form[data-form] [name]')]
-    .filter((el) => el.type !== 'checkbox' && el.type !== 'radio' && el.value && el.form.dataset.form !== submitting)
+    .filter((el) => el.type !== 'checkbox' && el.type !== 'radio' && el.value && el.form.dataset.form !== submitting && !el.dataset.autosave)
     .map((el) => [el.form.dataset.form, el.name, el.value]) : [];
   view.innerHTML = VIEWS[r]();
   for (const [f, n, v] of kept) {
@@ -2343,6 +2346,17 @@ document.addEventListener('submit', async (e) => {
       }
       break;
     }
+    case 'journal': {
+      const box = f.querySelector('textarea[name=text]');
+      const day = box.dataset.day || journalDay;
+      clearTimeout(journalTimer);
+      if (!box.value.trim()) { toast('Write something first.'); return; }
+      saveJournal(day, { text: box.value });
+      box.blur();
+      toast(`DARKO › Entry saved for ${parse(day).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}.`);
+      render();
+      break;
+    }
     case 'connect-google': {
       let url = val('url');
       const pairIdx = url.indexOf('#pair=');
@@ -2516,7 +2530,7 @@ let journalTimer = null;
 document.addEventListener('input', (e) => {
   if (!e.target.matches('[data-autosave=journal]')) return;
   const text = e.target.value;
-  const day = journalDay;
+  const day = e.target.dataset.day || journalDay;
   const label = $('#jSaved');
   if (label) label.textContent = 'SAVING…';
   clearTimeout(journalTimer);
